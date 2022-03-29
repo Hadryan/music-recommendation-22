@@ -3,7 +3,7 @@ import time
 import pandas as pd
 import numpy as np
 
-from core.ai.db.util import exec_get_one, exec_get_all, exec_commit, bulk_insert
+from src.db.util import exec_get_all, bulk_insert
 
 
 def score_genres():
@@ -28,8 +28,12 @@ def score_genres():
     for tup in genre_combs:
         center_genre, context_genre, rank, overlap, acoustic_factor, word_sim, region_sim_cnt, _ = tup
         num_genres = num_genres_per_country[idx2genre[center_genre]]
+
+        # Scale region similarity
         region_sim = 0 if num_genres == 0 else float(region_sim_cnt) / num_genres
         region_sim = 0.2 if region_sim < 0.5 else (1 if region_sim == 1 else 0.7)
+
+        # Weighted sum of tuple values
         final_score = ((3 * float(rank)) + float(overlap) + float(acoustic_factor) + float(word_sim) + region_sim) / 7
         checkpoint_data.append((center_genre, context_genre, final_score))
         counter += 1

@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.express as px
 from sklearn.cluster import DBSCAN, KMeans
 from collections import Counter
+from copy import deepcopy
 
 from src.models.genre2vec_model import Genre2Vec
 
@@ -27,10 +28,6 @@ def get_clusters(df, n_clusters=8, n_most_common=5, scale_factor=100000):
     return new_clusters
 
 
-def dbscan(tuple_list):
-    return DBSCAN(eps=0.026, min_samples=5).fit([x[1:] for x in tuple_list]).labels_
-
-
 def create_cluster_df(tuple_lst, columns=('genre', 'ranking', 'x', 'y', 'z')):
     df = pd.DataFrame(tuple_lst, columns)
     cluster_labels = get_clusters(df)
@@ -45,13 +42,18 @@ def main():
     genre2vec_model = Genre2Vec(input_size=len(genre2idx.keys()), enc_size=3)
     genre2vec_model.load_state_dict(load('../models/genre2vec/best_model_enc3_ep60_0.1022.pth.tar')['state_dict'])
 
-    full_tuple_lst = [((genre,) + tuple(to_numpy(genre2vec_model.encode_to_context(idx)))) for genre, idx in genre2idx.items()]
+    full_tuple_lst = [((genre,) + tuple(to_numpy(genre2vec_model.encode(idx)))) for genre, idx in genre2idx.items()]
     full_df = pd.DataFrame(full_tuple_lst, columns=('genre', 'x', 'y', 'z'))
-    cluster_labels = dbscan(full_tuple_lst)
-    full_df.insert(4, "cluster", cluster_labels)
+
+    cluster_labels = DBSCAN(eps=0.6, min_samples=4).fit([x[1:] for x in full_tuple_lst]).labels_
+    new_df = deepcopy(full_df)
+    new_df.insert(4, "cluster", cluster_labels)
+
+    color = 'plasma'
 
     # Create figure for the full set of all genres
-    fig = px.scatter_3d(full_df, x='x', y='y', z='z', hover_name='genre', color='cluster', title='Full Genre Set')
+    fig = px.scatter_3d(new_df, x='x', y='y', z='z', hover_name='genre', color='cluster', title=f'Full Genre Set',
+                        color_continuous_scale=color)
     fig.show()
 
     # Create figure to show the clustered distributions for each user
@@ -68,7 +70,7 @@ def main():
 
         # Create figure for this user's clusters
         fig = px.scatter_3d(user_df, x='x', y='y', z='z', size='ranking', hover_name='genre', color='cluster',
-                            symbol='cluster', title=f'Genre Distributions for {user}')
+                            symbol='cluster', title=f'Genre Distributions for {user}', color_continuous_scale=color)
         fig.show()
 
 

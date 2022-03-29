@@ -3,7 +3,7 @@ import dotenv
 import os
 import pickle
 
-env_path = os.path.join(os.path.dirname(__file__), '../../../.env')
+env_path = os.path.join(os.path.dirname(__file__), '../../.env')
 dotenv.read_dotenv(env_path)
 
 

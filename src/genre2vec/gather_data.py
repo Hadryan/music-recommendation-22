@@ -7,7 +7,7 @@ import threading
 import os
 import json
 
-from core.ai.db.util import exec_sql_file, bulk_insert
+from src.db.util import exec_sql_file, bulk_insert
 
 final_df = pd.DataFrame(columns=['center_genre', 'context_genre', 'similarity'])
 genre_count = 0
