@@ -8,6 +8,9 @@ def rescale_distribution(counts_map):
     Given a mapping where the values are counts, rescales the counts to be between 0 and 1 on a logarithmic scale.
     """
     counts = counts_map.values()
+    if len(counts) == 0:
+        return dict()
+
     max_log = log(max(counts))
     min_log = log(min(counts))
     for key, value in counts_map.items():
@@ -40,5 +43,26 @@ def chunk_it(seq, num):
     while last < len(seq):
         out.append(seq[int(last):int(last + avg)])
         last += avg
+
+    return out
+
+
+def chunk_it_max(seq, max_len):
+    out = []
+    last = 0.0
+
+    while last < len(seq):
+        if 2*max_len > len(seq) - last:
+            if (len(seq) - last) == max_len:
+                out.append(seq[int(last):int(last + max_len)])
+                break
+            else:
+                out.append(seq[int(last):int(last + (len(seq) - last)/2)])
+                last += int((len(seq) - last)/2)
+                out.append(seq[int(last):])
+                break
+        else:
+            out.append(seq[int(last):int(last + max_len)])
+            last += max_len
 
     return out

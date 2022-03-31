@@ -8,6 +8,7 @@ import os
 import json
 
 from src.db.util import exec_sql_file, bulk_insert
+from src.util import chunk_it
 
 final_df = pd.DataFrame(columns=['center_genre', 'context_genre', 'similarity'])
 genre_count = 0
@@ -142,18 +143,6 @@ def run_genre_list(genre_list, i):
     for genre in genre_list:
         update_for_genre(genre)
     print(f"THREAD #{i} COMPLETED")
-
-
-def chunk_it(seq, num):
-    avg = len(seq) / float(num)
-    out = []
-    last = 0.0
-
-    while last < len(seq):
-        out.append(seq[int(last):int(last + avg)])
-        last += avg
-
-    return out
 
 
 def main():
