@@ -14,30 +14,39 @@ with open('../data/msd/user_id_map.json', 'r') as f:
 with open('../data/genre2vec/genre2idx.json', 'r') as f:
     genre2idx = json.loads(f.read())
 
+# Flag indicating whether to load existing track and artist genres json files, or to recalculate them
+LOAD_EXISTING = True
 
-start = time.time()
-# Get a map of tracks to their artists
-track_artists_map, unique_artists = get_track_artists(list(set(user_data.spotify_id)))
+if LOAD_EXISTING:
+    with open('track_artists_map.json', 'r') as f:
+        track_artists_map = json.loads(f.read())
+    with open('artist_genres.json', 'r') as f:
+        artist_genres = json.loads(f.read())
+else:
+    start = time.time()
+    # Get a map of tracks to their artists
+    track_artists_map, unique_artists = get_track_artists(list(set(user_data.spotify_id)))
 
-track_artist_time = time.time()
-print(f'\nFinished gathering track artist data from Spotify in {track_artist_time - start}s')
+    track_artist_time = time.time()
+    print(f'\nFinished gathering track artist data from Spotify in {track_artist_time - start}s')
 
-with open('track_artists_map.json', 'w') as f:
-    f.write(json.dumps(track_artists_map))
+    with open('track_artists_map.json', 'w') as f:
+        f.write(json.dumps(track_artists_map))
 
-# Get a map of artists to their genres
-artist_genres = get_artist_genres(unique_artists)
-artist_genre_time = time.time()
-print(f'\nFinished gathering artist genre data in {artist_genre_time - track_artist_time}s')
+    # Get a map of artists to their genres
+    artist_genres = get_artist_genres(unique_artists)
+    artist_genre_time = time.time()
+    print(f'\nFinished gathering artist genre data in {artist_genre_time - track_artist_time}s')
 
+    with open('artist_genres.json', 'w') as f:
+        f.write(json.dumps(artist_genres))
 
-with open('artist_genres.json', 'w') as f:
-    f.write(json.dumps(artist_genres))
-
-with open('track_artists_map.json', 'r') as f:
-    track_artists_map = json.loads(f.read())
-with open('artist_genres.json', 'r') as f:
-    artist_genres = json.loads(f.read())
+    track_genres = {track: list(j for sub in list(map(artist_genres.get, track_artists_map[track])) for j in sub)
+                    for track in track_artists_map.keys()}
+    track_genres = {track: rescale_distribution(dict(Counter(genres).most_common()))
+                    for track, genres in track_genres.items()}
+    with open('track_genres.json', 'w') as f:
+        f.write(json.dumps(track_genres))
 
 
 update_lock = threading.Lock()
