@@ -4,6 +4,7 @@ import numpy as np
 import json
 import pickle
 from time import time
+import os
 
 
 def get_data(track_genres):
@@ -100,11 +101,33 @@ def get_distribution_neighbors(dist, index, int_to_track, track_genres, genre2en
     :return: dict of nearest neighbors. Key is a track id, value is the genre distribution (this will be a subset of
              track_genres)
     """
-    dist_enc = np.array([np.hstack([np.array([freq]), genre2enc[g]]) for g, freq in dist.items() if g in genre2enc.keys()])
+    dist_enc = get_distribution_encoding(dist, genre2enc)
+    return get_enc_neighbors(dist_enc, index, int_to_track, track_genres, k)
+
+
+def get_enc_neighbors(dist_enc, index, int_to_track, track_genres, k=100):
     query_result = index.query([dist_enc.reshape(-1)], k=k)[0][0]
     query_result = list(map(int_to_track.get, query_result.astype(str)))
     res = {k: v for k, v in track_genres.items() if k in query_result}
     return res
+
+
+def get_distribution_encoding(dist, genre2enc):
+    return np.array([np.hstack([np.array([freq]), genre2enc[g]]) for g, freq in dist.items() if g in genre2enc.keys()])
+
+
+def get_nearest_neighbor_data(include_genre2enc=False):
+    with open(os.path.join(os.path.dirname(__file__), '../models/genre2vec/index_enc128.pickle'), 'rb') as f:
+        index = pickle.load(f)
+    with open(os.path.join(os.path.dirname(__file__), 'int_to_track.json'), 'r') as f:
+        int_to_track = json.loads(f.read())
+    with open(os.path.join(os.path.dirname(__file__), 'track_genres.json'), 'r') as f:
+        track_genres = json.loads(f.read())
+    if include_genre2enc:
+        from src.genre2vec.cluster import genre2enc
+        return index, int_to_track, track_genres, genre2enc
+    else:
+        return index, int_to_track, track_genres
 
 
 def main():
@@ -124,6 +147,8 @@ def main():
     saved to src/models/genre2vec/index_enc128.pickle. If there is already a model file, this flag can be set to True.
 
     If both flags are set to True, this function just loads everything and can be used for debugging.
+
+    TODO should probably move this file and its associated files to src/genre2vec
 
     --- Required files ---
     src/million_songs/track_genres.json
