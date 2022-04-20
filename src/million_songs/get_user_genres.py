@@ -18,6 +18,47 @@ genre2idx = dict()
 progress_bar = tqdm()
 
 
+def process_user_lst(user_lst):
+    print("Thread started")
+    for user_id in user_lst:
+        process_user(user_id)
+    print("Thread finished")
+
+
+def process_user(user_id):
+    # Get a DataFrame of just this user's data
+    cur_user_data = user_data[user_data.user_id == user_id]
+
+    # Create dict where the key is the spotify_id and the value is the listen count
+    listen_count_dict = pd.Series(cur_user_data.listen_count.values, index=cur_user_data.spotify_id).to_dict()
+
+    cur_user_genres = []
+    for track in cur_user_data.spotify_id:
+        # Get the genres for this track (i.e. the combined genres for all artists on this track)
+        track_genres = [j for sub in list(map(artist_genres.get, track_artists_map[track])) for j in sub]
+        # Add n copies of these genres, where n is the number of times the user listened to this track
+        cur_user_genres.extend(track_genres * listen_count_dict[track])
+
+    cur_user_genres = rescale_distribution(dict(Counter(cur_user_genres).most_common()))
+    cur_user_genres = {genre2idx[k]: v for k, v in cur_user_genres.items()}
+    update_dict(user_id, cur_user_genres)
+
+
+def update_dict(user_id, user_genres):
+    update_lock.acquire()
+    try:
+        global user_data_results, progress_bar
+        user_data_results[int(user_id)] = user_genres
+
+        if len(user_data_results) % 50000 == 0:
+            with open(f'MSD_genre_data_{len(user_data_results)}.json', 'w') as f:
+                f.write(json.dumps(user_data_results))
+
+        progress_bar.update(1)
+    finally:
+        update_lock.release()
+
+
 def main():
     global user_data, artist_genres, track_artists_map, user_data_results, genre2idx, progress_bar
 
@@ -82,47 +123,6 @@ def main():
 
     with open('MSD_genre_data.json', 'w') as f:
         f.write(json.dumps(user_data_results))
-
-
-def process_user_lst(user_lst):
-    print("Thread started")
-    for user_id in user_lst:
-        process_user(user_id)
-    print("Thread finished")
-
-
-def process_user(user_id):
-    # Get a DataFrame of just this user's data
-    cur_user_data = user_data[user_data.user_id == user_id]
-
-    # Create dict where the key is the spotify_id and the value is the listen count
-    listen_count_dict = pd.Series(cur_user_data.listen_count.values, index=cur_user_data.spotify_id).to_dict()
-
-    cur_user_genres = []
-    for track in cur_user_data.spotify_id:
-        # Get the genres for this track (i.e. the combined genres for all artists on this track)
-        track_genres = [j for sub in list(map(artist_genres.get, track_artists_map[track])) for j in sub]
-        # Add n copies of these genres, where n is the number of times the user listened to this track
-        cur_user_genres.extend(track_genres * listen_count_dict[track])
-
-    cur_user_genres = rescale_distribution(dict(Counter(cur_user_genres).most_common()))
-    cur_user_genres = {genre2idx[k]: v for k, v in cur_user_genres.items()}
-    update_dict(user_id, cur_user_genres)
-
-
-def update_dict(user_id, user_genres):
-    update_lock.acquire()
-    try:
-        global user_data_results, progress_bar
-        user_data_results[int(user_id)] = user_genres
-
-        if len(user_data_results) % 50000 == 0:
-            with open(f'MSD_genre_data_{len(user_data_results)}.json', 'w') as f:
-                f.write(json.dumps(user_data_results))
-
-        progress_bar.update(1)
-    finally:
-        update_lock.release()
 
 
 if __name__ == '__main__':

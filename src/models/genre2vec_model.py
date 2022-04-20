@@ -9,11 +9,7 @@ import json
 from torch import load
 from ray import tune
 
-if torch.cuda.is_available():
-    dev = "cuda:0"
-else:
-    dev = "cpu"
-device = torch.device(dev)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 class Genre2Vec(nn.Module):
