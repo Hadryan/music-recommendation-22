@@ -19,7 +19,7 @@ with open('track_genres.json', 'r') as f:
 user_genre_data = {int(user_id): {idx2genre[k]: v for k, v in genre_data.items()}
                    for user_id, genre_data in user_genre_data.items()}
 
-nearest_neighbor_data = get_nearest_neighbor_data()
+nearest_neighbor_data = get_nearest_neighbor_data()  #TODO enc_size
 from src.genre2vec.cluster import genre2enc
 
 data_col_names = None  # This holds the column names for the encoding data. ['x1', 'x2', ..., 'xn']

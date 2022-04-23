@@ -7,7 +7,7 @@ from time import time
 import os
 
 
-def get_data(track_genres):
+def get_data(track_genres, enc_size):
     """
     Take in dict of tracks and the their genres. An example of the input to this function would look like:
     {'blues rock': 0.333, 'jam band': 0.333, 'pop rock': 0.333}
@@ -17,6 +17,7 @@ def get_data(track_genres):
     :param track_genres: dict of tracks to frequencies
     :return: ndarray of training data
     """
+    # TODO use enc_size parameter
     from src.genre2vec.cluster import genre2enc
     # Get encodings of tracks
     track_encodings = dict()
@@ -32,7 +33,7 @@ def get_data(track_genres):
     max_len = max([x.shape[0] for x in track_encodings])
     track_encodings = np.array([np.vstack([x, np.zeros(shape=(max_len - x.shape[0], x.shape[1]))])
                                 for x in track_encodings])
-    track_encodings.tofile('track_genres_padded.dat')
+    track_encodings.tofile(f'track_genres_padded_enc{list(genre2enc.values())[0].size}.dat')
     with open('int_to_track.json', 'w') as f:
         f.write(json.dumps(int_to_track))
     return track_encodings, int_to_track
@@ -51,7 +52,7 @@ def custom_distance(x, y):
     :param y: 1d numpy array that meets the constraints described
     :return: Distance between x and y
     """
-    ENC_SIZE = 128
+    ENC_SIZE = 32
 
     x_mod = x.reshape((-1, ENC_SIZE+1))
     y_mod = y.reshape((-1, ENC_SIZE+1))
@@ -116,8 +117,8 @@ def get_distribution_encoding(dist, genre2enc):
     return np.array([np.hstack([np.array([freq]), genre2enc[g]]) for g, freq in dist.items() if g in genre2enc.keys()])
 
 
-def get_nearest_neighbor_data(include_genre2enc=False):
-    with open(os.path.join(os.path.dirname(__file__), '../models/genre2vec/index_enc128.pickle'), 'rb') as f:
+def get_nearest_neighbor_data(enc_size, include_genre2enc=False):
+    with open(os.path.join(os.path.dirname(__file__), f'../models/genre2vec/index_enc{enc_size}.pickle'), 'rb') as f:
         index = pickle.load(f)
     with open(os.path.join(os.path.dirname(__file__), 'int_to_track.json'), 'r') as f:
         int_to_track = json.loads(f.read())
@@ -159,15 +160,17 @@ def main():
     use_preloaded_data = True
     use_preloaded_index_model = True
 
+    enc_size = 32
+
     with open('track_genres.json', 'r') as f:
         track_genres = json.loads(f.read())
 
     if use_preloaded_data:
-        data = np.fromfile('track_genres_padded.dat', dtype=float).reshape((-1, 35, 129))
+        data = np.fromfile(f'track_genres_padded_enc{enc_size}.dat', dtype=float).reshape((-1, 35, enc_size+1))
         with open('int_to_track.json', 'r') as f:
             int_to_track = json.loads(f.read())
     else:
-        data, int_to_track = get_data(track_genres)
+        data, int_to_track = get_data(track_genres, enc_size)
         print('Finished loading data')
 
     track_to_int = {v: int(k) for k, v in int_to_track.items()}
@@ -178,7 +181,7 @@ def main():
     data = data.reshape(data.shape[0], -1)
 
     if use_preloaded_index_model:
-        with open('../models/genre2vec/index_enc128.pickle', 'rb') as f:
+        with open(f'../models/genre2vec/index_enc{enc_size}.pickle', 'rb') as f:
             index = pickle.load(f)
     else:
         print('Beginning nearest neighbors approximation...')
@@ -187,7 +190,7 @@ def main():
         index.prepare()
 
         print(f'Finished in {time() - start}s. Saving to file...')
-        with open('../models/genre2vec/index_enc128.pickle', 'wb') as f:
+        with open(f'../models/genre2vec/index_enc{enc_size}.pickle', 'wb') as f:
             pickle.dump(index, f, protocol=4)
         print('Finished!')
 

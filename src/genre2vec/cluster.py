@@ -14,13 +14,18 @@ with open(os.path.join(os.path.dirname(__file__), '../data/genre2vec/idx2genre.j
     idx2genre = json.loads(f.read())
     idx2genre = {int(k): idx2genre[k] for k in idx2genre.keys()}
 
-enc_size = 128
+# TODO parameterize this so any enc size can be passed in
+
+# enc_size = 128
+enc_size = 32
 enc_labels = ['x'+str(x) for x in range(enc_size)]
 
 # Load encoding model
 genre2vec_model = Genre2Vec(input_size=len(genre2idx.keys()), enc_size=enc_size)
+# genre2vec_model.load_state_dict(load(os.path.join(os.path.dirname(__file__),
+#                                                   '../models/genre2vec/best_model_enc128_ep75_0.007_6-22-21.pth.tar'))
 genre2vec_model.load_state_dict(load(os.path.join(os.path.dirname(__file__),
-                                                  '../models/genre2vec/best_model_enc128_ep75_0.007_6-22-21.pth.tar'))
+                                                  '../models/genre2vec/best_model_enc32_ep75_0.0083.pth.tar'))
                                 ['state_dict'])
 idx2enc = genre2vec_model.embedding.weight.data.cpu().numpy()
 genre2enc = {genre_str: idx2enc[genre2idx[genre_str]] for genre_str in genre2idx.keys()}

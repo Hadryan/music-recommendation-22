@@ -6,55 +6,58 @@ from torch import load
 from ray import tune
 import copy
 import os
+import numpy as np
+from tqdm import tqdm
 
-from src.models.genre2vec_model import Genre2Vec, train_epocs
+from src.models.item2vec_model import Item2Vec, train_epocs
+
+
+def process_data(data):
+    print('processing data...')
+    res = []
+    for center in tqdm(data.center.unique()):
+        context = data[data.center == center][['context', 'sim']].to_numpy()
+        if context.shape[0] != 100:
+            # We have less than 100 context samples. This means we need to repeat some of the negative samples.
+            neg_samples = context[np.where(context[:, 1] == 0)]
+            num_needed = 100 - context.shape[0]
+            extra_neg_samples = np.repeat(neg_samples, np.ceil(num_needed / len(neg_samples)), axis=0)[:num_needed]
+            context = np.vstack([context, extra_neg_samples])
+        res.append(context)
+    res = np.stack(res)
+    np.save('../data/item2vec/sgns_training_data_np.npy', res)
+    print('saved processed data')
+    return res
 
 
 start = time.time()
-data_path = os.path.join(os.path.dirname(__file__), '../data/genre2vec/genre_training_data_pos45to9_neg08.csv')
-data = pd.read_csv(data_path)
 
-inputs_full = data[['center_genre', 'context_genre']].to_numpy()
-outputs_full = data[['score']].to_numpy()
+# # Uncomment the following lines to create the '../data/item2vec/sgns_training_data_np.npy' file:
+# data_path = os.path.join(os.path.dirname(__file__), '../data/item2vec/sgns_training_data.csv')
+# data = pd.read_csv(data_path)
+# data = process_data(data)
 
-num_genres = len(data.center_genre.unique())
+data = np.load('../data/item2vec/sgns_training_data_np.npy')
+num_tracks = data.shape[0]
 
-# reshaped = [[x[1]['score'] for x in data.loc[data['center_genre'] == y].iterrows()] for y in range(num_genres)]
 
-
-class Genre2VecDataset(Dataset):
-    def __init__(self, inputs, outputs):
-        self.inputs = inputs
-        self.outputs = outputs
-        if len(self.inputs) != len(self.outputs):
-            raise Exception(f"Mismatched input and output data. "
-                            f"Found {len(self.inputs)} inputs and {len(self.outputs)} outputs")
+class Item2VecDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
 
     def __len__(self):
-        return len(self.inputs)
+        return data.shape[0]
 
     def __getitem__(self, idx):
-        return self.inputs[idx], self.outputs[idx]
-
-
-class Genre2VecDatasetAllInOne(Dataset):
-    def __init__(self, inputs, outputs):
-        self.inputs = inputs
-        self.outputs = outputs
-        if len(self.inputs) != len(self.outputs):
-            raise Exception(f"Mismatched input and output data. "
-                            f"Found {len(self.inputs)} inputs and {len(self.outputs)} outputs")
-
-    def __len__(self):
-        return len(self.inputs)
-
-    def __getitem__(self, idx):
-        return self.inputs[idx], self.outputs[idx]
+        # What we want:
+        # target: (batch_size,) meaning __getitem__ should return shape (1,)
+        # contexts: (batch_size, 100) meaning __getitem__ should return shape (100,)
+        # context_sims: (batch_size, 100) meaning __getitem__ should return shape (100,)
+        return idx, data[idx][:, 0], data[idx][:, 1]
 
 
 print(f"Loaded data from files in {time.time() - start}s")
-# inputs_train, inputs_test, outputs_train, outputs_test = train_test_split(inputs_full, outputs_full, test_size=0.10)
-full_dataset = Genre2VecDataset(inputs_full, outputs_full)
+full_dataset = Item2VecDataset(data)
 
 full_data_loader = DataLoader(dataset=full_dataset, batch_size=512, shuffle=True)
 
@@ -63,7 +66,7 @@ full_data_loader = DataLoader(dataset=full_dataset, batch_size=512, shuffle=True
 # checkpoint = load(filename)
 
 enc_size = 32
-model = Genre2Vec(num_genres, enc_size=enc_size)
+model = Item2Vec(num_tracks, enc_size=enc_size)
 
 
 def train_with_tune(config):
@@ -75,8 +78,9 @@ def find_lr(model, prev_lr):
     start = time.time()
     model_cpy = copy.deepcopy(model)
     potential_lrs = [prev_lr*5, prev_lr*2, prev_lr, prev_lr/2, prev_lr/5, prev_lr * 0.1]
+    potential_lrs = [x for x in potential_lrs if x >= 0.001]
     analysis = tune.run(train_with_tune, config={"model": model_cpy, "lr": tune.grid_search(potential_lrs)},
-                        resources_per_trial={'gpu': 1},
+                        resources_per_trial={'gpu': 1, 'cpu': 8},
                         num_samples=3)
     print(f"Found lr in {time.time() - start}s")
     print("Best config: ", analysis.get_best_config(metric="mean_loss", mode='min'))
@@ -84,17 +88,16 @@ def find_lr(model, prev_lr):
 
 
 def main():
-
     global model
 
-    # Note: took ~6h to get a good model for enc32 TODO remove this note
-
-    num_trials = 25
-    num_epochs_per_trial = 15
+    num_trials = 10
+    num_epochs_per_trial = 25
     epoch_start = 0
-    lr = 0.01
+    lr = 0.05
     while True:
-        lr = find_lr(model, lr)
+        if epoch_start != 0:
+            lr = find_lr(model, lr)
+
         best_model = None
         best_loss = 1000
         for i in range(num_trials):

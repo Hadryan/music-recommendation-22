@@ -68,7 +68,7 @@ def update_dict(user_id, user_genres):
 class RecommendationEngine:
     def __init__(self, user_data_filepath):
         self.user_data = pd.read_csv(user_data_filepath)
-        self.index, self.int_to_track, self.track_genres = get_nearest_neighbor_data()
+        self.index, self.int_to_track, self.track_genres = get_nearest_neighbor_data()  # TODO enc_size
         self.track_to_int = {v: int(k) for k, v in self.int_to_track.items()}
         self.genre2enc = src.genre2vec.cluster.genre2enc
 
