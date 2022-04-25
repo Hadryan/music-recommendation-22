@@ -7,28 +7,34 @@ import os
 
 from src.models.genre2vec_model import Genre2Vec
 
-# Load required maps
-with open(os.path.join(os.path.dirname(__file__), '../data/genre2vec/genre2idx.json'), 'r') as f:
-    genre2idx = json.loads(f.read())
-with open(os.path.join(os.path.dirname(__file__), '../data/genre2vec/idx2genre.json'), 'r') as f:
-    idx2genre = json.loads(f.read())
-    idx2genre = {int(k): idx2genre[k] for k in idx2genre.keys()}
 
-# TODO parameterize this so any enc size can be passed in
+def get_maps():
+    # Load required maps
+    with open(os.path.join(os.path.dirname(__file__), '../data/genre2vec/genre2idx.json'), 'r') as f:
+        genre2idx = json.loads(f.read())
+    with open(os.path.join(os.path.dirname(__file__), '../data/genre2vec/idx2genre.json'), 'r') as f:
+        idx2genre = json.loads(f.read())
+        idx2genre = {int(k): idx2genre[k] for k in idx2genre.keys()}
+    return genre2idx, idx2genre
 
-# enc_size = 128
-enc_size = 32
-enc_labels = ['x'+str(x) for x in range(enc_size)]
 
-# Load encoding model
-genre2vec_model = Genre2Vec(input_size=len(genre2idx.keys()), enc_size=enc_size)
-# genre2vec_model.load_state_dict(load(os.path.join(os.path.dirname(__file__),
-#                                                   '../models/genre2vec/best_model_enc128_ep75_0.007_6-22-21.pth.tar'))
-genre2vec_model.load_state_dict(load(os.path.join(os.path.dirname(__file__),
-                                                  '../models/genre2vec/best_model_enc32_ep75_0.0083.pth.tar'))
-                                ['state_dict'])
-idx2enc = genre2vec_model.embedding.weight.data.cpu().numpy()
-genre2enc = {genre_str: idx2enc[genre2idx[genre_str]] for genre_str in genre2idx.keys()}
+def get_genre2enc(enc_size=32):
+    genre2idx, idx2genre = get_maps()
+
+    # Load encoding model
+    genre2vec_model = Genre2Vec(input_size=len(genre2idx.keys()), enc_size=enc_size)
+    # genre2vec_model.load_state_dict(load(os.path.join(os.path.dirname(__file__),
+    #                                                   '../models/genre2vec/best_model_enc128_ep75_0.007_6-22-21.pth.tar'))
+    genre2vec_model.load_state_dict(load(os.path.join(os.path.dirname(__file__),
+                                                      '../models/genre2vec/best_model_enc32_ep75_0.0083.pth.tar'))
+                                    ['state_dict'])
+    idx2enc = genre2vec_model.embedding.weight.data.cpu().numpy()
+    genre2enc = {genre_str: idx2enc[genre2idx[genre_str]] for genre_str in genre2idx.keys()}
+    return genre2enc
+
+
+def get_enc_labels(enc_size=32):
+    return ['x' + str(x) for x in range(enc_size)]
 
 
 def to_numpy(x):
@@ -66,6 +72,9 @@ def dbscan(tuple_list):
 
 
 def get_clusters_from_genre_dict(genre_dict, n_clusters=8, n_most_common=5, scale_factor=100):
+    genre2enc = get_genre2enc()
+    enc_labels = get_enc_labels()
+    genre2idx, idx2genre = get_maps()
     genre_dict = {genre: rank for genre, rank in genre_dict.items() if genre in genre2idx.keys()}
     tuple_lst = [(genre, ranking) + tuple(genre2enc[genre]) for genre, ranking in genre_dict.items()]
     df = pd.DataFrame(tuple_lst, columns=(['data', 'ranking'] + enc_labels))

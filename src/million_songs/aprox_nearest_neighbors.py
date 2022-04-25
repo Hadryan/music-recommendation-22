@@ -5,24 +5,26 @@ import json
 import pickle
 from time import time
 import os
+from src.genre2vec.cluster import get_genre2enc
+from enum import Enum
+from scipy.spatial.distance import cosine
 
 
-def get_data(track_genres, enc_size):
-    """
-    Take in dict of tracks and the their genres. An example of the input to this function would look like:
-    {'blues rock': 0.333, 'jam band': 0.333, 'pop rock': 0.333}
+def get_genre_data(enc_size, save_data=True):
+    with open('track_genres.json', 'r') as f:
+        track_genres = json.loads(f.read())
 
-    Outputs an ndarray of shape (# of items in dataset, max number of genres in any one track, encoding size)
+    with open('track_to_id.json', 'r') as f:
+        track_to_id = json.loads(f.read())
+        id_to_track = {v: k for k, v in track_to_id.items()}
 
-    :param track_genres: dict of tracks to frequencies
-    :return: ndarray of training data
-    """
-    # TODO use enc_size parameter
-    from src.genre2vec.cluster import genre2enc
+    genre2enc = get_genre2enc(enc_size=enc_size)
+
     # Get encodings of tracks
     track_encodings = dict()
-    for track_id, genres in track_genres.items():
+    for track_id in track_to_id.keys():
         # Note: ignoring tracks with no genre
+        genres = track_genres[track_id]
         if len(genres) != 0:
             track_encodings[track_id] = np.array([np.hstack([np.array([freq]), genre2enc[g]])
                                                   for g, freq in genres.items()])
@@ -33,14 +35,54 @@ def get_data(track_genres, enc_size):
     max_len = max([x.shape[0] for x in track_encodings])
     track_encodings = np.array([np.vstack([x, np.zeros(shape=(max_len - x.shape[0], x.shape[1]))])
                                 for x in track_encodings])
-    track_encodings.tofile(f'track_genres_padded_enc{list(genre2enc.values())[0].size}.dat')
-    with open('int_to_track.json', 'w') as f:
+    if save_data:
+        track_encodings.tofile(f'track_genres_padded_enc{list(genre2enc.values())[0].size}.dat')
+    with open('valid_int_to_track.json', 'w') as f:
         f.write(json.dumps(int_to_track))
     return track_encodings, int_to_track
 
 
+def get_svd_data(enc_size, int_to_track=None):
+    if int_to_track is None:
+        with open('valid_int_to_track.json', 'r') as f:
+            int_to_track = json.loads(f.read())
+
+    return np.load(f'../models/svd/svd_enc{enc_size}_binary.npy'), int_to_track
+
+
+def get_genre_svd_data(enc_size):
+    genre_encodings, int_to_track = get_genre_data(enc_size, save_data=False)
+    svd, int_to_track = get_svd_data(enc_size, int_to_track=int_to_track)
+
+    svd = np.hstack([np.zeros((svd.shape[0], 1)), svd])  # Append 0 to start of svd values to match genre_enc shape
+    genre_encodings = genre_encodings.reshape(genre_encodings.shape[0], -1)  # Flatten each genre_enc
+
+    result = np.concatenate([svd, genre_encodings], axis=1).reshape(svd.shape[0], -1, enc_size+1)
+
+    result.tofile(f'genre_svd_data_enc{enc_size}.dat')
+    return result, int_to_track
+
+
 @numba.njit()
-def custom_distance(x, y):
+def svd_distance(x, y):
+    enc_size = 32
+    return custom_distance(x, y, enc_size, has_svd=True, has_genre=False)
+
+
+@numba.njit()
+def genre_distance(x, y):
+    enc_size = 32
+    return custom_distance(x, y, enc_size, has_svd=False, has_genre=True)
+
+
+@numba.njit()
+def genre_svd_distance(x, y):
+    enc_size = 32
+    return custom_distance(x, y, enc_size, has_svd=True, has_genre=True)
+
+
+@numba.njit()
+def custom_distance(x, y, enc_size, has_svd, has_genre):
     """
     Customized distance function for approximating nearest neighbors. Expects two 1d arrays for inputs x and y. These
     should be arrays that had been flattened from the shape (num_genres, 1+enc_size). The 1+ in the second dimension
@@ -52,13 +94,22 @@ def custom_distance(x, y):
     :param y: 1d numpy array that meets the constraints described
     :return: Distance between x and y
     """
-    ENC_SIZE = 32
 
-    x_mod = x.reshape((-1, ENC_SIZE+1))
-    y_mod = y.reshape((-1, ENC_SIZE+1))
+    if has_svd and not has_genre:
+        return 1 - ((x @ y) / (np.linalg.norm(x) * np.linalg.norm(y)))
+
+    x_mod = x.reshape((-1, enc_size+1))
+    y_mod = y.reshape((-1, enc_size+1))
 
     x_mod = np.array([list(x) for x in x_mod if x.any()])
     y_mod = np.array([list(y) for y in y_mod if y.any()])
+
+    if has_svd:
+        x_svd = x_mod[0]
+        y_svd = y_mod[0]
+        svd_distance = 1 - ((x_svd @ y_svd) / (np.linalg.norm(x_svd) * np.linalg.norm(y_svd)))
+        x_mod = x_mod[1:]
+        y_mod = y_mod[1:]
 
     # Extract genre frequencies from the vectors
     x_freqs = x_mod[:, 0] + 1
@@ -84,6 +135,9 @@ def custom_distance(x, y):
     b_to_a_dist = (np.array([x.min() for x in dist.T]) * y_freqs).mean() / y_freqs.mean()
 
     avg_dist = (a_to_b_dist + b_to_a_dist) / 2.0
+
+    if has_svd:
+        avg_dist = (avg_dist + svd_distance) / 2.0
 
     return avg_dist
 
@@ -125,10 +179,16 @@ def get_nearest_neighbor_data(enc_size, include_genre2enc=False):
     with open(os.path.join(os.path.dirname(__file__), 'track_genres.json'), 'r') as f:
         track_genres = json.loads(f.read())
     if include_genre2enc:
-        from src.genre2vec.cluster import genre2enc
+        genre2enc = get_genre2enc(enc_size)
         return index, int_to_track, track_genres, genre2enc
     else:
         return index, int_to_track, track_genres
+
+
+class EncodingType(Enum):
+    GENRE = 1
+    SVD = 2
+    GENRE_SVD = 3
 
 
 def main():
@@ -159,52 +219,71 @@ def main():
     """
     use_preloaded_data = True
     use_preloaded_index_model = True
+    encoding_type = EncodingType.SVD
 
     enc_size = 32
 
-    with open('track_genres.json', 'r') as f:
-        track_genres = json.loads(f.read())
-
     if use_preloaded_data:
-        data = np.fromfile(f'track_genres_padded_enc{enc_size}.dat', dtype=float).reshape((-1, 35, enc_size+1))
-        with open('int_to_track.json', 'r') as f:
+        if encoding_type == EncodingType.GENRE:
+            data = np.fromfile(f'track_genres_padded_enc{enc_size}.dat', dtype=float).reshape((-1, 35, enc_size+1))
+        elif encoding_type == EncodingType.SVD:
+            data, int_to_track = get_svd_data(enc_size)
+        else:
+            data = np.fromfile(f'genre_svd_data_enc{enc_size}.dat', dtype=float).reshape((-1, 36, enc_size+1))
+
+        with open('valid_int_to_track.json', 'r') as f:
             int_to_track = json.loads(f.read())
     else:
-        data, int_to_track = get_data(track_genres, enc_size)
+        if encoding_type == EncodingType.GENRE:
+            data, int_to_track = get_genre_data(enc_size)
+        elif encoding_type == EncodingType.SVD:
+            data, int_to_track = get_svd_data(enc_size)
+        else:
+            data, int_to_track = get_genre_svd_data(enc_size)
         print('Finished loading data')
 
     track_to_int = {v: int(k) for k, v in int_to_track.items()}
-    data_tiny = data[:2000]
 
     # Reshape to 2d
-    data_tiny = data_tiny.reshape(data_tiny.shape[0], -1)
     data = data.reshape(data.shape[0], -1)
 
+    # Get distance function
+    if encoding_type == EncodingType.GENRE:
+        dist_func = genre_distance
+    elif encoding_type == EncodingType.SVD:
+        dist_func = svd_distance
+    else:
+        dist_func = genre_svd_distance
+
+    dist = dist_func(data[200], data[209])
+
     if use_preloaded_index_model:
-        with open(f'../models/genre2vec/index_enc{enc_size}.pickle', 'rb') as f:
+        with open(f'../models/index/index_{encoding_type.name}_enc{enc_size}.pickle', 'rb') as f:
             index = pickle.load(f)
     else:
         print('Beginning nearest neighbors approximation...')
         start = time()
-        index = NNDescent(data, metric=custom_distance, n_neighbors=50, verbose=True)
+        index = NNDescent(data, metric=dist_func, n_neighbors=50, verbose=True)
         index.prepare()
 
         print(f'Finished in {time() - start}s. Saving to file...')
-        with open(f'../models/genre2vec/index_enc{enc_size}.pickle', 'wb') as f:
+        with open(f'../models/index/index_{encoding_type.name}_enc{enc_size}.pickle', 'wb') as f:
             pickle.dump(index, f, protocol=4)
         print('Finished!')
 
-    with open('../data/genre2vec/user_genre_data/david.json', 'r') as f:
-        david_data = json.loads(f.read())
-    with open('../data/genre2vec/user_genre_data/steven.json', 'r') as f:
-        steven_data = json.loads(f.read())
-    with open('../data/genre2vec/user_genre_data/tim.json', 'r') as f:
-        tim_data = json.loads(f.read())
-
-    from src.genre2vec.cluster import genre2enc
-    david_recs = get_distribution_neighbors(david_data, index, int_to_track, track_genres, genre2enc, k=50)
-    print(f'David recs: {david_recs}')
     x = 1
+
+    # with open('../data/genre2vec/user_genre_data/david.json', 'r') as f:
+    #     david_data = json.loads(f.read())
+    # with open('../data/genre2vec/user_genre_data/steven.json', 'r') as f:
+    #     steven_data = json.loads(f.read())
+    # with open('../data/genre2vec/user_genre_data/tim.json', 'r') as f:
+    #     tim_data = json.loads(f.read())
+    #
+    # genre2enc = get_genre2enc()
+    # david_recs = get_distribution_neighbors(david_data, index, int_to_track, track_genres, genre2enc, k=50)
+    # print(f'David recs: {david_recs}')
+    # x = 1
 
 
 if __name__ == '__main__':

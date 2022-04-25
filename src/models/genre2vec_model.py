@@ -7,7 +7,6 @@ import numpy as np
 from scipy import spatial
 import json
 from torch import load
-from ray import tune
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -137,6 +136,7 @@ def train_epocs(model, train_loader, test_loader, epochs=10, lr=0.01, wd=0.0, ch
 
     val_loss = test_loss(model, test_loader)
     if do_tune:
+        from ray import tune
         tune.report(mean_loss=val_loss)
     return val_loss
 
