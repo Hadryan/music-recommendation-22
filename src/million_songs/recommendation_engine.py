@@ -6,7 +6,7 @@ import pandas as pd
 from nltk.cluster.kmeans import KMeansClusterer
 from sklearn.model_selection import train_test_split
 
-from src.million_songs.aprox_nearest_neighbors import get_nearest_neighbor_data, custom_distance, EncodingType
+from src.million_songs.aprox_nearest_neighbors import get_nearest_neighbor_data, get_distance_func, EncodingType
 from src.util import chunk_it
 
 
@@ -23,6 +23,7 @@ class RecommendationEngine(object):
         self.encoding_data = nn_data['encoding_data']
         self.neighbor_graph = nn_data['neighbor_graph']
 
+        self.distance_func = get_distance_func(self.encoding_type)
         self.track_to_int = {v: int(k) for k, v in self.int_to_track.items()}
 
     def get_track_neighbors(self, track_id, k=50):
@@ -51,7 +52,7 @@ class RecommendationEngine(object):
                 if i != j:
                     i_enc = full_user_profile_enc[i]
                     j_enc = full_user_profile_enc[j]
-                    dist = custom_distance(i_enc, j_enc)
+                    dist = self.distance_func(i_enc, j_enc)
                     sum_dist += dist
             novelty = (1 / (len(user_profile_items) - 1)) * sum_dist
             full_item_novelties.append(novelty)
@@ -119,7 +120,7 @@ class RecommendationEngine(object):
                 if i != j:
                     i_enc = recommendation_enc[i]
                     j_enc = recommendation_enc[j]
-                    dist = custom_distance(i_enc, j_enc)
+                    dist = self.distance_func(i_enc, j_enc)
                     sum_dist += dist
         diversity = (1 / (N * (N - 1))) * sum_dist
 
@@ -128,7 +129,7 @@ class RecommendationEngine(object):
         for rec_item_idx in range(len(recommendation_items)):
             rec_item_sims = []
             for profile_item_idx in range(len(user_profile_items)):
-                item_sim = 1 - custom_distance(recommendation_enc[rec_item_idx], user_profile_enc[profile_item_idx])
+                item_sim = 1 - self.distance_func(recommendation_enc[rec_item_idx], user_profile_enc[profile_item_idx])
                 rec_item_sims.append(item_sim)
             avg_rec_item_sim = sum(rec_item_sims) / len(rec_item_sims)
             total_sims.append(avg_rec_item_sim)
@@ -160,7 +161,7 @@ class RecommendationEngine(object):
         start = time.time()
 
         # TODO try multiple k for each user?
-        kclusterer = KMeansClusterer(k_clusters, distance=custom_distance, repeats=5, avoid_empty_clusters=True)
+        kclusterer = KMeansClusterer(k_clusters, distance=self.distance_func, repeats=5, avoid_empty_clusters=True)
         assigned_clusters = kclusterer.cluster(user_encodings, assign_clusters=True)
         # print(f'Checkpoint 2 (clustering): {time.time() - start}')
         start = time.time()
@@ -204,7 +205,7 @@ class RecommendationEngine(object):
             for idx, cand_track_enc in enumerate(candidate_encodings):
                 track_id = candidates[idx]
                 distances = np.array(
-                    [custom_distance(clust_track_enc, cand_track_enc) for clust_track_enc in clust_encodings])
+                    [self.distance_func(clust_track_enc, cand_track_enc) for clust_track_enc in clust_encodings])
                 avg_distance = (distances * listen_counts).mean()
                 cand_scores.append((track_id, avg_distance))
             cluster_recs = [x[0] for x in sorted(cand_scores, key=lambda x: x[1])[:n_per_cluster]]
@@ -218,7 +219,7 @@ class RecommendationEngine(object):
                                       for x in user_track_ids])
         for rec_track_id in total_recs:
             rec_enc = self.encoding_data[self.track_to_int[rec_track_id]]
-            distances = [custom_distance(user_track_enc, rec_enc) for user_track_enc in user_encodings_flat]
+            distances = [self.distance_func(user_track_enc, rec_enc) for user_track_enc in user_encodings_flat]
             avg_distance = (distances * all_listen_counts).mean()
             total_recs_dist.append((rec_track_id, avg_distance))
 

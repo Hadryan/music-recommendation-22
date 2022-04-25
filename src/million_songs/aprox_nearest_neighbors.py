@@ -197,6 +197,16 @@ def load_data(encoding_type, enc_size):
     return data
 
 
+def get_distance_func(encoding_type):
+    if encoding_type == EncodingType.GENRE:
+        dist_func = genre_distance
+    elif encoding_type == EncodingType.SVD:
+        dist_func = svd_distance
+    else:
+        dist_func = genre_svd_distance
+    return dist_func
+
+
 class EncodingType(Enum):
     GENRE = 1
     SVD = 2
@@ -254,13 +264,7 @@ def main():
     # Reshape to 2d
     data = data.reshape(data.shape[0], -1)
 
-    # Get distance function
-    if encoding_type == EncodingType.GENRE:
-        dist_func = genre_distance
-    elif encoding_type == EncodingType.SVD:
-        dist_func = svd_distance
-    else:
-        dist_func = genre_svd_distance
+    dist_func = get_distance_func(encoding_type)
 
     dist = dist_func(data[200], data[209])
 
