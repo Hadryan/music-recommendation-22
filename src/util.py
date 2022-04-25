@@ -40,8 +40,8 @@ def chunk_it(seq, num):
     out = []
     last = 0.0
 
-    while last < len(seq):
-        out.append(seq[int(last):int(last + avg)])
+    while (last + 0.00001) < len(seq):
+        out.append(seq[int(last):int((last + 0.00001) + avg)])
         last += avg
 
     return out

@@ -1,4 +1,3 @@
-import os
 import time
 
 import numpy as np
@@ -61,6 +60,8 @@ class RecommendationEngine(object):
         profile_item_novelties_idxs = profile_item_novelties.argsort()
         sorted_user_profile_items = np.array(user_profile_items)[profile_item_novelties_idxs]
 
+        num_bins = 10
+
         # Get a list of how many of the recommended items were sourced from each of the items in the user profile,
         # sorted least novel to most novel. This is done both for the recommendations as a whole and for just the hits.
         recs_per_item_func = lambda rec_origin: [np.where(rec_origin == sorted_user_profile_items[i])[0].shape[0]
@@ -68,26 +69,34 @@ class RecommendationEngine(object):
         hits_per_item = recs_per_item_func(np.array(recommendation_origins)[hit_idxs])
         recs_per_item = recs_per_item_func(np.array(recommendation_origins))
 
-        # Get lorenz y values (items ordered by increasing proportion of hits achieved)
-        hits_per_item_idxs = np.array(hits_per_item).argsort()
-        hits_lorenz_cumsum = np.cumsum(np.array(hits_per_item)[hits_per_item_idxs]) / (
+        # Chunk into num_bins so results can be compared regardless of the size of the user profile
+        hits_per_bin = np.array([sum(x) for x in chunk_it(hits_per_item, num_bins)]) / (
             len(hits_set) if len(hits_set) > 0 else 1)
+        recs_per_bin = np.array([sum(x) for x in chunk_it(recs_per_item, num_bins)]) / len(recommendation_items)
+
+        # Get lorenz y values (items ordered by increasing proportion of hits achieved)
+        hits_per_bin_idxs = np.array(hits_per_bin).argsort()
+        lorenz_per_bin = np.array(hits_per_bin)[hits_per_bin_idxs]
+        hits_lorenz_cumsum = np.cumsum(lorenz_per_bin)
 
         # Get concentration y values (items ordered by increasing novelty)
-        hits_concentration_cumsum = np.cumsum(hits_per_item) / (len(hits_set) if len(hits_set) > 0 else 1)
-        recs_concentration_cumsum = np.cumsum(recs_per_item) / len(recommendation_items)
+        hits_concentration_cumsum = np.cumsum(hits_per_bin)
+        recs_concentration_cumsum = np.cumsum(recs_per_bin)
 
         # Compute the concentration index and gini index
-        lorenz_auc = np.trapz(hits_lorenz_cumsum, dx=(1 / (len(user_profile_items) - 1)))
-        concentration_auc = np.trapz(hits_concentration_cumsum, dx=(1 / (len(user_profile_items) - 1)))
+        lorenz_auc = np.trapz(hits_lorenz_cumsum, dx=(1 / num_bins))
+        hits_concentration_auc = np.trapz(hits_concentration_cumsum, dx=(1 / num_bins))
+        recs_concentration_auc = np.trapz(recs_concentration_cumsum, dx=(1 / num_bins))
         gini_index = 1 - (2 * lorenz_auc)
-        concentration_index = 1 - (2 * concentration_auc)
+        hits_concentration_index = 1 - (2 * hits_concentration_auc)
+        recs_concentration_index = 1 - (2 * recs_concentration_auc)
 
         # # Code to actually draw the plot for hits_per_item or recs_per_item
         # import matplotlib.pyplot as plt
         #
-        # x = [x / (len(user_profile_items) - 1) for x in range(len(user_profile_items))]
-        # y = recs_per_item
+        # num_bins = 10
+        # x = [x / (num_bins) for x in range(num_bins+1)]
+        # y = [0] + list(hits_concentration_cumsum)
         #
         # fig, ax = plt.subplots(figsize=[6, 6])
         # ax.axline((1, 1), slope=1, ls="--", color="gray")
@@ -134,37 +143,27 @@ class RecommendationEngine(object):
             avg_rec_item_sim = sum(rec_item_sims) / len(rec_item_sims)
             total_sims.append(avg_rec_item_sim)
         similarity = sum(total_sims) / len(total_sims)
-        return {'hits_lorenz_cumsum': hits_lorenz_cumsum,
-                'hits_concentration_cumsum': hits_concentration_cumsum,
-                'recs_concentration_cumsum': recs_concentration_cumsum,
+        return {'hits_lorenz': lorenz_per_bin,
+                'hits_con': hits_per_bin,
+                'recs_con': recs_per_bin,
                 'gini_index': gini_index,
-                'concentration_index': concentration_index,
+                'hits_concentration_index': hits_concentration_index,
+                'recs_concentration_index': recs_concentration_index,
                 'total_precision': total_precision,
                 'binned_precisions': binned_precisions,
                 'diversity': diversity,
                 'similarity': similarity}
 
-    def cluster_user(self, user_id, k_clusters=5, n_recs=20, test_percent=0.2, k_neighbors=50):
-        start = time.time()
-
-        # Get this user's listening data and drop any tracks that aren't in the track_to_int dict
-        cur_user_data = self.user_data[self.user_data.user_id == user_id]
-
+    def get_clustered_recommendations(self, cur_user_data, k_clusters=5, n_recs=100, test_percent=0.2, k_neighbors=50):
         cur_user_data, user_data_test = train_test_split(cur_user_data, test_size=test_percent)
-        # Create dict where the key is the spotify_id and the value is the listen count
-        listen_count_dict = pd.Series(cur_user_data.listen_count.values, index=cur_user_data.spotify_id).to_dict()
 
         user_track_ints = [x for x in map(self.track_to_int.get, cur_user_data['spotify_id']) if x is not None]
         user_track_ids = list(map(self.int_to_track.get, np.array(user_track_ints).astype(str)))
         user_encodings = self.encoding_data[user_track_ints]
-        # print(f'Checkpoint 1: {time.time() - start}')
-        start = time.time()
 
         # TODO try multiple k for each user?
         kclusterer = KMeansClusterer(k_clusters, distance=self.distance_func, repeats=5, avoid_empty_clusters=True)
         assigned_clusters = kclusterer.cluster(user_encodings, assign_clusters=True)
-        # print(f'Checkpoint 2 (clustering): {time.time() - start}')
-        start = time.time()
 
         # Get a list of lists of ndarrays. There are k outer lists (one for each cluster). Each of those contains some
         # number of ndarrays. Each ndarray represents the encoding of a track.
@@ -175,8 +174,6 @@ class RecommendationEngine(object):
                                     for x in enumerate(assigned_clusters) if x[1] == y]
                                    for y in range(max(assigned_clusters) + 1)]
         user_encodings_flat = [j for sub in clustered_user_encodings for j in sub]
-        # print(f'Checkpoint 3: {time.time() - start}')
-        start = time.time()
 
         cluster_candidates = {x: [] for x in set(assigned_clusters)}
         all_candidates = set()
@@ -190,9 +187,6 @@ class RecommendationEngine(object):
                 all_candidates.update(neighbors)
                 cur_origins = {self.track_to_int[x]: self.track_to_int[track_id] for x in neighbors}
                 candidate_origins = {**candidate_origins, **cur_origins}
-
-        # print(f'Checkpoint 4: {time.time() - start}')
-        start = time.time()
 
         total_recs = []
         n_per_cluster = n_recs // k_clusters
@@ -211,9 +205,6 @@ class RecommendationEngine(object):
             cluster_recs = [x[0] for x in sorted(cand_scores, key=lambda x: x[1])[:n_per_cluster]]
             total_recs.extend(cluster_recs)
 
-        # print(f'Checkpoint 5: {time.time() - start}')
-        start = time.time()
-
         total_recs_dist = []
         all_listen_counts = np.array([cur_user_data[cur_user_data.spotify_id == x]['listen_count'].values[0]
                                       for x in user_track_ids])
@@ -225,9 +216,6 @@ class RecommendationEngine(object):
 
         total_recs = [x[0] for x in sorted(total_recs_dist, key=lambda x: x[1])]
 
-        # print(f'Checkpoint 6: {time.time() - start}')
-        start = time.time()
-
         user_profile_items = [x for x in map(self.track_to_int.get, cur_user_data.spotify_id) if x is not None]
         recommendation_items = [x for x in map(self.track_to_int.get, total_recs) if x is not None]
         user_test_items = [x for x in map(self.track_to_int.get, user_data_test.spotify_id) if x is not None]
@@ -238,58 +226,89 @@ class RecommendationEngine(object):
                                                   recommendation_origins=recommendation_origins)
         return metrics
 
+    def get_standard_recommendations(self, cur_user_data, n_recs=100, test_percent=0.2, k_neighbors=50):
+        cur_user_data, user_data_test = train_test_split(cur_user_data, test_size=test_percent)
+
+        user_track_ints = [x for x in map(self.track_to_int.get, cur_user_data['spotify_id']) if x is not None]
+        user_track_ids = list(map(self.int_to_track.get, np.array(user_track_ints).astype(str)))
+        user_listen_counts = [item.listen_count for idx, item in cur_user_data.iterrows()
+                              if item.spotify_id in self.track_to_int.keys()]
+
+        all_candidates = set()
+        candidate_origins = dict()  # dict to store which song in the user profile is responsible for each candidate
+        for track_id in user_track_ids:
+            neighbors = self.get_track_neighbors(track_id, k=k_neighbors)
+            neighbors = set(neighbors) - set(cur_user_data['spotify_id']) - all_candidates
+            all_candidates.update(neighbors)
+            cur_origins = {self.track_to_int[x]: self.track_to_int[track_id] for x in neighbors}
+            candidate_origins = {**candidate_origins, **cur_origins}
+
+        recommendation_items = []
+        for candidate in candidate_origins.keys():
+            candidate_encoding = self.encoding_data[candidate]
+            distances = np.array(
+                [self.distance_func(candidate_encoding, self.encoding_data[t_int]) for t_int in user_track_ints])
+            avg_distance = (distances * np.array(user_listen_counts)).mean()
+            recommendation_items.append((candidate, avg_distance))
+        recommendation_items = [x[0] for x in sorted(recommendation_items, key=lambda x: x[1])[:n_recs]]
+
+        user_profile_items = [x for x in map(self.track_to_int.get, cur_user_data.spotify_id) if x is not None]
+        user_test_items = [x for x in map(self.track_to_int.get, user_data_test.spotify_id) if x is not None]
+        recommendation_origins = [candidate_origins[x] for x in recommendation_items]
+        metrics = self.get_recommendation_metrics(user_profile_items=user_profile_items,
+                                                  recommendation_items=recommendation_items,
+                                                  user_test_items=user_test_items,
+                                                  recommendation_origins=recommendation_origins)
+        return metrics
+
+    @staticmethod
+    def get_aggregated_results(res):
+        percent_zero_precision = len([x for x in res if x['total_precision'] == 0]) / len(res)
+        aggregated_clustered_results = {
+            'hits_lorenz_non_zero': [] if percent_zero_precision == 1 else
+            list(np.mean([x['hits_lorenz'] for x in res if x['total_precision'] != 0], axis=0)),
+            'hits_lorenz_full': list(np.mean([x['hits_lorenz'] for x in res], axis=0)),
+            'hits_con_non_zero': [] if percent_zero_precision == 1 else
+            list(np.mean([x['hits_con'] for x in res if x['total_precision'] != 0], axis=0)),
+            'hits_con_full': list(np.mean([x['hits_con'] for x in res], axis=0)),
+            'recs_con': list(np.mean([x['recs_con'] for x in res], axis=0)),
+            'gini_index': np.mean([x['gini_index'] for x in res]),
+            'gini_index_non_zero': [] if percent_zero_precision == 1 else
+            np.mean([x['gini_index'] for x in res if x['total_precision'] != 0]),
+            'hits_concentration_index': np.mean([x['hits_concentration_index'] for x in res]),
+            'hits_concentration_index_non_zero': [] if percent_zero_precision == 1 else np.mean(
+                [x['hits_concentration_index'] for x in res if x['total_precision'] != 0]),
+            'recs_concentration_index': np.mean([x['recs_concentration_index'] for x in res]),
+            'percent_zero_precision': percent_zero_precision,
+            'total_precision': np.mean([x['total_precision'] for x in res]),
+            'binned_precisions': list(np.mean([x['binned_precisions'] for x in res], axis=0)),
+            'diversity': np.mean([x['diversity'] for x in res]),
+            'similarity': np.mean([x['similarity'] for x in res]),
+        }
+        return aggregated_clustered_results
+
     def run_trials_for_user(self, user_id, num_trials=10):
         start = time.time()
-        full_results = []
+
+        # Get this user's listening data
+        cur_user_data = self.user_data[self.user_data.user_id == user_id]
+
+        full_clustered_results = []
+        full_standard_results = []
         for i in range(num_trials):
-            res = self.cluster_user(user_id)
-            full_results.append(res)
-        print(f'Finished {num_trials} trials for user {user_id} in {round(time.time() - start, 3)}s')
+            clustered_res = self.get_clustered_recommendations(cur_user_data)
+            standard_res = self.get_standard_recommendations(cur_user_data)
+            full_clustered_results.append(clustered_res)
+            full_standard_results.append(standard_res)
+
+        aggregated_clustered_results = self.get_aggregated_results(full_clustered_results)
+        aggregated_standard_results = self.get_aggregated_results(full_standard_results)
+
+        return {
+            'user_profile_size': np.floor((1 - 0.2)*len(cur_user_data)),
+            'standard': aggregated_standard_results,
+            'clustered': aggregated_clustered_results
+        }
 
     def get_user_ids(self):
         return self.user_data.user_id.unique()
-
-
-def main():
-    global user_data, artist_genres, track_artists_map, user_data_results, genre2idx, progress_bar
-
-    num_threads = 1
-
-    user_data_filepath = os.path.join(os.path.dirname(__file__), '../data/msd/MSD_spotify_interactions_clean.csv')
-
-    encoding_type = EncodingType.SVD
-    engine = RecommendationEngine(user_data_filepath, encoding_type, enc_size=32)
-
-    user_ids = engine.user_data.user_id.unique()
-
-    # engine.cluster_user(12)
-
-    # engine.run_trials_for_user(12)
-    for i in range(50):
-        start = time.time()
-        engine.run_trials_for_user(user_ids[i])
-        # print(f'Got recs in {time.time() - start}s')
-
-    # TODO train / test split
-
-    # user_list = list(user_data.user_id.unique())
-    # users_for_threads = chunk_it(user_list, num_threads)
-    # threads = []
-    #
-    # progress_bar = tqdm(total=len(user_list))
-    # for i in range(num_threads):
-    #     user_lst = users_for_threads[i]
-    #     threads.append(threading.Thread(target=process_user_lst, args=(user_lst,)))
-    # for thread in threads:
-    #     thread.start()
-    # for thread in threads:
-    #     thread.join()
-    #
-    # progress_bar.close()
-    #
-    # with open('MSD_genre_data.json', 'w') as f:
-    #     f.write(json.dumps(user_data_results))
-
-
-if __name__ == '__main__':
-    main()

@@ -10,10 +10,10 @@ from enum import Enum
 
 
 def get_genre_data(enc_size, save_data=True):
-    with open('track_genres.json', 'r') as f:
+    with open(os.path.join(os.path.dirname(__file__), 'track_genres.json'), 'r') as f:
         track_genres = json.loads(f.read())
 
-    with open('track_to_id.json', 'r') as f:
+    with open(os.path.join(os.path.dirname(__file__), 'track_to_id.json'), 'r') as f:
         track_to_id = json.loads(f.read())
         id_to_track = {v: k for k, v in track_to_id.items()}
 
@@ -36,17 +36,17 @@ def get_genre_data(enc_size, save_data=True):
                                 for x in track_encodings])
     if save_data:
         track_encodings.tofile(f'track_genres_padded_enc{list(genre2enc.values())[0].size}.dat')
-    with open('valid_int_to_track.json', 'w') as f:
+    with open(os.path.join(os.path.dirname(__file__), 'valid_int_to_track.json'), 'w') as f:
         f.write(json.dumps(int_to_track))
     return track_encodings, int_to_track
 
 
 def get_svd_data(enc_size, int_to_track=None):
     if int_to_track is None:
-        with open('valid_int_to_track.json', 'r') as f:
+        with open(os.path.join(os.path.dirname(__file__), 'valid_int_to_track.json'), 'r') as f:
             int_to_track = json.loads(f.read())
 
-    return np.load(f'../models/svd/svd_enc{enc_size}_binary.npy'), int_to_track
+    return np.load(os.path.join(os.path.dirname(__file__), f'../models/svd/svd_enc{enc_size}_binary.npy')), int_to_track
 
 
 def get_genre_svd_data(enc_size):
@@ -95,7 +95,7 @@ def custom_distance(x, y, enc_size, has_svd, has_genre):
     """
 
     if has_svd and not has_genre:
-        return 1 - ((x @ y) / (np.linalg.norm(x) * np.linalg.norm(y)))
+        return np.float32(1.0) - ((x @ y) / (np.linalg.norm(x) * np.linalg.norm(y)))
 
     x_mod = x.reshape((-1, enc_size+1))
     y_mod = y.reshape((-1, enc_size+1))
@@ -106,7 +106,7 @@ def custom_distance(x, y, enc_size, has_svd, has_genre):
     if has_svd:
         x_svd = x_mod[0]
         y_svd = y_mod[0]
-        svd_distance = 1 - ((x_svd @ y_svd) / (np.linalg.norm(x_svd) * np.linalg.norm(y_svd)))
+        svd_distance = np.float32(1.0) - ((x_svd @ y_svd) / (np.linalg.norm(x_svd) * np.linalg.norm(y_svd)))
         x_mod = x_mod[1:]
         y_mod = y_mod[1:]
 
@@ -189,11 +189,13 @@ def get_nearest_neighbor_data(enc_size, encoding_type):
 
 def load_data(encoding_type, enc_size):
     if encoding_type == EncodingType.GENRE:
-        data = np.fromfile(f'track_genres_padded_enc{enc_size}.dat', dtype=float).reshape((-1, 35, enc_size + 1))
+        fname = os.path.join(os.path.dirname(__file__), f'track_genres_padded_enc{enc_size}.dat')
+        data = np.fromfile(fname, dtype=float).reshape((-1, 35 * (enc_size + 1)))
     elif encoding_type == EncodingType.SVD:
         data, _ = get_svd_data(enc_size)
     else:
-        data = np.fromfile(f'genre_svd_data_enc{enc_size}.dat', dtype=float).reshape((-1, 36, enc_size + 1))
+        fname = os.path.join(os.path.dirname(__file__), f'genre_svd_data_enc{enc_size}.dat')
+        data = np.fromfile(fname, dtype=float).reshape((-1, 36 * (enc_size + 1)))
     return data
 
 
@@ -248,7 +250,7 @@ def main():
     if use_preloaded_data:
         data = load_data(encoding_type, enc_size)
 
-        with open('valid_int_to_track.json', 'r') as f:
+        with open(os.path.join(os.path.dirname(__file__), 'valid_int_to_track.json'), 'r') as f:
             int_to_track = json.loads(f.read())
     else:
         if encoding_type == EncodingType.GENRE:
