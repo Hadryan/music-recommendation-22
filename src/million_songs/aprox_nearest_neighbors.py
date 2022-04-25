@@ -7,7 +7,6 @@ from time import time
 import os
 from src.genre2vec.cluster import get_genre2enc
 from enum import Enum
-from scipy.spatial.distance import cosine
 
 
 def get_genre_data(enc_size, save_data=True):
@@ -171,18 +170,31 @@ def get_distribution_encoding(dist, genre2enc):
     return np.array([np.hstack([np.array([freq]), genre2enc[g]]) for g, freq in dist.items() if g in genre2enc.keys()])
 
 
-def get_nearest_neighbor_data(enc_size, include_genre2enc=False):
-    with open(os.path.join(os.path.dirname(__file__), f'../models/genre2vec/index_enc{enc_size}.pickle'), 'rb') as f:
+def get_nearest_neighbor_data(enc_size, encoding_type):
+    with open(os.path.join(os.path.dirname(__file__), f'../models/index/index_{encoding_type.name}_enc{enc_size}.pickle'), 'rb') as f:
         index = pickle.load(f)
-    with open(os.path.join(os.path.dirname(__file__), 'int_to_track.json'), 'r') as f:
+    with open(os.path.join(os.path.dirname(__file__), 'valid_int_to_track.json'), 'r') as f:
         int_to_track = json.loads(f.read())
     with open(os.path.join(os.path.dirname(__file__), 'track_genres.json'), 'r') as f:
         track_genres = json.loads(f.read())
-    if include_genre2enc:
-        genre2enc = get_genre2enc(enc_size)
-        return index, int_to_track, track_genres, genre2enc
+
+    encoding_data = load_data(encoding_type, enc_size)
+    neighbor_graph = index.neighbor_graph
+
+    return {'int_to_track': int_to_track,
+            'track_genres': track_genres,
+            'encoding_data': encoding_data,
+            'neighbor_graph': neighbor_graph}
+
+
+def load_data(encoding_type, enc_size):
+    if encoding_type == EncodingType.GENRE:
+        data = np.fromfile(f'track_genres_padded_enc{enc_size}.dat', dtype=float).reshape((-1, 35, enc_size + 1))
+    elif encoding_type == EncodingType.SVD:
+        data, _ = get_svd_data(enc_size)
     else:
-        return index, int_to_track, track_genres
+        data = np.fromfile(f'genre_svd_data_enc{enc_size}.dat', dtype=float).reshape((-1, 36, enc_size + 1))
+    return data
 
 
 class EncodingType(Enum):
@@ -224,12 +236,7 @@ def main():
     enc_size = 32
 
     if use_preloaded_data:
-        if encoding_type == EncodingType.GENRE:
-            data = np.fromfile(f'track_genres_padded_enc{enc_size}.dat', dtype=float).reshape((-1, 35, enc_size+1))
-        elif encoding_type == EncodingType.SVD:
-            data, int_to_track = get_svd_data(enc_size)
-        else:
-            data = np.fromfile(f'genre_svd_data_enc{enc_size}.dat', dtype=float).reshape((-1, 36, enc_size+1))
+        data = load_data(encoding_type, enc_size)
 
         with open('valid_int_to_track.json', 'r') as f:
             int_to_track = json.loads(f.read())

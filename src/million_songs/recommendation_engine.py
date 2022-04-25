@@ -1,39 +1,38 @@
-import pandas as pd
-import json
-
-import src.genre2vec.cluster
-from src.spotify.util import get_track_artists, get_artist_genres
-from src.util import chunk_it, rescale_distribution
-from collections import Counter
-import time
 import os
-import threading
-from tqdm import tqdm
+import time
+
 import numpy as np
-from src.million_songs.aprox_nearest_neighbors import get_enc_neighbors, get_nearest_neighbor_data, \
-    get_distribution_encoding, custom_distance
-from src.genre2vec.cluster import get_genre2enc
+import pandas as pd
 from nltk.cluster.kmeans import KMeansClusterer
 from sklearn.model_selection import train_test_split
 
+from src.million_songs.aprox_nearest_neighbors import get_nearest_neighbor_data, custom_distance, EncodingType
+from src.util import chunk_it
+
 
 class RecommendationEngine(object):
-    def __init__(self, user_data_filepath):
-        self.enc_size = 32  # TODO parameterize enc_size
+    def __init__(self, user_data_filepath, encoding_type, enc_size=32):
+        self.enc_size = enc_size
+        self.encoding_type = encoding_type
+
         self.user_data = pd.read_csv(user_data_filepath)
-        self.index, self.int_to_track, self.track_genres = get_nearest_neighbor_data(
-            enc_size=self.enc_size)
+
+        nn_data = get_nearest_neighbor_data(encoding_type=self.encoding_type, enc_size=self.enc_size)
+        self.int_to_track = nn_data['int_to_track']
+        self.track_genres = nn_data['track_genres']
+        self.encoding_data = nn_data['encoding_data']
+        self.neighbor_graph = nn_data['neighbor_graph']
+
         self.track_to_int = {v: int(k) for k, v in self.int_to_track.items()}
-        self.genre2enc = get_genre2enc(enc_size=self.enc_size)
 
     def get_track_neighbors(self, track_id, k=50):
-        return list(map(self.int_to_track.get, self.index._neighbor_graph[0][self.track_to_int[track_id]].astype(str)))[:k]
+        return list(map(self.int_to_track.get, self.neighbor_graph[0][self.track_to_int[track_id]].astype(str)))[:k]
 
     def get_recommendation_metrics(self, user_profile_items, recommendation_items, user_test_items,
                                    recommendation_origins):
-        user_profile_enc = [self.index._raw_data[x] for x in user_profile_items]
-        recommendation_enc = [self.index._raw_data[x] for x in recommendation_items]
-        user_test_enc = [self.index._raw_data[x] for x in user_test_items]
+        user_profile_enc = [self.encoding_data[x] for x in user_profile_items]
+        recommendation_enc = [self.encoding_data[x] for x in recommendation_items]
+        user_test_enc = [self.encoding_data[x] for x in user_test_items]
         N = len(recommendation_items)
         hits_set = set(user_test_items).intersection(set(recommendation_items))
         hit_idxs = [idx for idx, item in enumerate(recommendation_items) if item in hits_set]
@@ -148,9 +147,7 @@ class RecommendationEngine(object):
         start = time.time()
 
         # Get this user's listening data and drop any tracks that aren't in the track_to_int dict
-        # TODO do we still need to do this once we fix the track_to_int? (it is currently too big)
         cur_user_data = self.user_data[self.user_data.user_id == user_id]
-        # cur_user_data.drop(cur_user_data[~cur_user_data.spotify_id.isin(self.track_to_int.keys())].index, inplace=True)
 
         cur_user_data, user_data_test = train_test_split(cur_user_data, test_size=test_percent)
         # Create dict where the key is the spotify_id and the value is the listen count
@@ -158,7 +155,7 @@ class RecommendationEngine(object):
 
         user_track_ints = [x for x in map(self.track_to_int.get, cur_user_data['spotify_id']) if x is not None]
         user_track_ids = list(map(self.int_to_track.get, np.array(user_track_ints).astype(str)))
-        user_encodings = self.index._raw_data[user_track_ints]
+        user_encodings = self.encoding_data[user_track_ints]
         # print(f'Checkpoint 1: {time.time() - start}')
         start = time.time()
 
@@ -170,7 +167,7 @@ class RecommendationEngine(object):
 
         # Get a list of lists of ndarrays. There are k outer lists (one for each cluster). Each of those contains some
         # number of ndarrays. Each ndarray represents the encoding of a track.
-        clustered_user_encodings = [[self.index._raw_data[user_track_ints[x[0]]]
+        clustered_user_encodings = [[self.encoding_data[user_track_ints[x[0]]]
                                      for x in enumerate(assigned_clusters) if x[1] == y]
                                     for y in range(max(assigned_clusters) + 1)]
         clustered_listen_counts = [[cur_user_data.iloc[x[0]]['listen_count']
@@ -201,7 +198,7 @@ class RecommendationEngine(object):
         for clust_id, candidates in cluster_candidates.items():
             clust_encodings = clustered_user_encodings[clust_id]
             listen_counts = np.array(clustered_listen_counts[clust_id])
-            candidate_encodings = [self.index._raw_data[x] for x in map(self.track_to_int.get, candidates)]
+            candidate_encodings = [self.encoding_data[x] for x in map(self.track_to_int.get, candidates)]
 
             cand_scores = []
             for idx, cand_track_enc in enumerate(candidate_encodings):
@@ -220,7 +217,7 @@ class RecommendationEngine(object):
         all_listen_counts = np.array([cur_user_data[cur_user_data.spotify_id == x]['listen_count'].values[0]
                                       for x in user_track_ids])
         for rec_track_id in total_recs:
-            rec_enc = self.index._raw_data[self.track_to_int[rec_track_id]]
+            rec_enc = self.encoding_data[self.track_to_int[rec_track_id]]
             distances = [custom_distance(user_track_enc, rec_enc) for user_track_enc in user_encodings_flat]
             avg_distance = (distances * all_listen_counts).mean()
             total_recs_dist.append((rec_track_id, avg_distance))
@@ -258,16 +255,18 @@ def main():
     num_threads = 1
 
     user_data_filepath = os.path.join(os.path.dirname(__file__), '../data/msd/MSD_spotify_interactions_clean.csv')
-    engine = RecommendationEngine(user_data_filepath)
+
+    encoding_type = EncodingType.SVD
+    engine = RecommendationEngine(user_data_filepath, encoding_type, enc_size=32)
 
     user_ids = engine.user_data.user_id.unique()
 
     # engine.cluster_user(12)
 
-    engine.run_trials_for_user(12)
-    # for i in range(50):
-    #     start = time.time()
-    #     engine.run_trials_for_user(user_ids[i])
+    # engine.run_trials_for_user(12)
+    for i in range(50):
+        start = time.time()
+        engine.run_trials_for_user(user_ids[i])
         # print(f'Got recs in {time.time() - start}s')
 
     # TODO train / test split
