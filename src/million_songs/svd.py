@@ -41,9 +41,8 @@ def main():
     col = df.spotify_id.astype(item_c).cat.codes
     sparse_matrix = csr_matrix((df["listen_count"], (row, col)), shape=(user_c.categories.size, item_c.categories.size))
 
-    # interactions_matrix = df.pivot_table(index='user_id', columns='spotify_id', values='listen_count').fillna(0).values
-
     tsvd = TruncatedSVD(n_components=32).fit(sparse_matrix)
+    tsvd_big = TruncatedSVD(n_components=1000).fit(sparse_matrix)
     svd = tsvd.components_.T
 
     np.save('../models/svd/svd_enc32_binary.npy', svd)

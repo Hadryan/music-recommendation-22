@@ -91,22 +91,6 @@ class RecommendationEngine(object):
         hits_concentration_index = 1 - (2 * hits_concentration_auc)
         recs_concentration_index = 1 - (2 * recs_concentration_auc)
 
-        # # Code to actually draw the plot for hits_per_item or recs_per_item
-        # import matplotlib.pyplot as plt
-        #
-        # num_bins = 10
-        # x = [x / (num_bins) for x in range(num_bins+1)]
-        # y = [0] + list(hits_concentration_cumsum)
-        #
-        # fig, ax = plt.subplots(figsize=[6, 6])
-        # ax.axline((1, 1), slope=1, ls="--", color="gray")
-        # plt.xlabel("Cumulative % of items sorted by novelty values")
-        # plt.ylabel("Cumulative % of recommended items")
-        # plt.xlim([-0.01, 1.01])
-        # plt.ylim([-0.01, 1.01])
-        # plt.plot(x, y, color="red")
-        # plt.show()
-
         # ----------------------------------- Precision (Total and Per Novelty Bin) -----------------------------------
         total_precision = len(hits_set) / N
 
@@ -143,6 +127,12 @@ class RecommendationEngine(object):
             avg_rec_item_sim = sum(rec_item_sims) / len(rec_item_sims)
             total_sims.append(avg_rec_item_sim)
         similarity = sum(total_sims) / len(total_sims)
+
+        # -------------------------------- NDCG - Normalized Discounted Cumulative Gain --------------------------------
+        dcg = np.array([1 / np.log2(x[0] + 2) for x in enumerate(recommendation_items) if x[1] in hits_set]).sum()
+        ideal_dcg = np.array([1 / np.log2(x + 2) for x in range(len(user_test_items))]).sum()
+        ndcg = dcg / ideal_dcg
+
         return {'hits_lorenz': lorenz_per_bin,
                 'hits_con': hits_per_bin,
                 'recs_con': recs_per_bin,
@@ -152,9 +142,11 @@ class RecommendationEngine(object):
                 'total_precision': total_precision,
                 'binned_precisions': binned_precisions,
                 'diversity': diversity,
-                'similarity': similarity}
+                'similarity': similarity,
+                'ndcg': ndcg}
 
-    def get_clustered_recommendations(self, cur_user_data, k_clusters=5, n_recs=100, test_percent=0.2, k_neighbors=50):
+    def get_clustered_recommendations(self, cur_user_data, k_clusters=5, n_recs=100,
+                                      test_percent=0.2, k_neighbors=50):
         cur_user_data, user_data_test = train_test_split(cur_user_data, test_size=test_percent)
 
         user_track_ints = [x for x in map(self.track_to_int.get, cur_user_data['spotify_id']) if x is not None]
@@ -162,6 +154,8 @@ class RecommendationEngine(object):
         user_encodings = self.encoding_data[user_track_ints]
 
         # TODO try multiple k for each user?
+
+        # assigned_clusters = self.get_clusters_safe(k_clusters, user_encodings, thread_num)
         kclusterer = KMeansClusterer(k_clusters, distance=self.distance_func, repeats=5, avoid_empty_clusters=True)
         assigned_clusters = kclusterer.cluster(user_encodings, assign_clusters=True)
 
@@ -220,6 +214,7 @@ class RecommendationEngine(object):
         recommendation_items = [x for x in map(self.track_to_int.get, total_recs) if x is not None]
         user_test_items = [x for x in map(self.track_to_int.get, user_data_test.spotify_id) if x is not None]
         recommendation_origins = [candidate_origins[x] for x in recommendation_items]
+
         metrics = self.get_recommendation_metrics(user_profile_items=user_profile_items,
                                                   recommendation_items=recommendation_items,
                                                   user_test_items=user_test_items,
@@ -255,6 +250,26 @@ class RecommendationEngine(object):
         user_profile_items = [x for x in map(self.track_to_int.get, cur_user_data.spotify_id) if x is not None]
         user_test_items = [x for x in map(self.track_to_int.get, user_data_test.spotify_id) if x is not None]
         recommendation_origins = [candidate_origins[x] for x in recommendation_items]
+
+        metrics = self.get_recommendation_metrics(user_profile_items=user_profile_items,
+                                                  recommendation_items=recommendation_items,
+                                                  user_test_items=user_test_items,
+                                                  recommendation_origins=recommendation_origins)
+        return metrics
+
+    def get_random_recommendations(self, cur_user_data, n_recs=100, test_percent=0.2):
+        cur_user_data, user_data_test = train_test_split(cur_user_data, test_size=test_percent)
+
+        user_profile_items = [x for x in map(self.track_to_int.get, cur_user_data.spotify_id) if x is not None]
+        user_test_items = [x for x in map(self.track_to_int.get, user_data_test.spotify_id) if x is not None]
+
+        # Randomly select n_recs items (without replacement) from the set of possible songs
+        recommendation_items = np.random.choice(list(self.track_to_int.keys()), size=n_recs, replace=False)
+        recommendation_items = list(map(self.track_to_int.get, recommendation_items))
+
+        # Randomly select n_recs items (WITH replacement) from the user profile. This acts as the "source" of the recs
+        recommendation_origins = np.random.choice(user_profile_items, size=n_recs)
+
         metrics = self.get_recommendation_metrics(user_profile_items=user_profile_items,
                                                   recommendation_items=recommendation_items,
                                                   user_test_items=user_test_items,
@@ -284,10 +299,11 @@ class RecommendationEngine(object):
             'binned_precisions': list(np.mean([x['binned_precisions'] for x in res], axis=0)),
             'diversity': np.mean([x['diversity'] for x in res]),
             'similarity': np.mean([x['similarity'] for x in res]),
+            'ndcg': np.mean([x['ndcg'] for x in res]),
         }
         return aggregated_clustered_results
 
-    def run_trials_for_user(self, user_id, num_trials=10):
+    def run_trials_for_user(self, user_id, thread_num, num_trials=10):
         start = time.time()
 
         # Get this user's listening data
@@ -305,7 +321,7 @@ class RecommendationEngine(object):
         aggregated_standard_results = self.get_aggregated_results(full_standard_results)
 
         return {
-            'user_profile_size': np.floor((1 - 0.2)*len(cur_user_data)),
+            'user_profile_size': np.floor((1 - 0.2) * len(cur_user_data)),
             'standard': aggregated_standard_results,
             'clustered': aggregated_clustered_results
         }

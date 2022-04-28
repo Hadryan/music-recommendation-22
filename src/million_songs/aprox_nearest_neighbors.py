@@ -7,6 +7,7 @@ from time import time
 import os
 from src.genre2vec.cluster import get_genre2enc
 from enum import Enum
+import time
 
 
 def get_genre_data(enc_size, save_data=True):
@@ -62,25 +63,25 @@ def get_genre_svd_data(enc_size):
     return result, int_to_track
 
 
-@numba.njit()
+# @numba.njit()
 def svd_distance(x, y):
     enc_size = 32
     return custom_distance(x, y, enc_size, has_svd=True, has_genre=False)
 
 
-@numba.njit()
+# @numba.njit()
 def genre_distance(x, y):
     enc_size = 32
     return custom_distance(x, y, enc_size, has_svd=False, has_genre=True)
 
 
-@numba.njit()
+# @numba.njit()
 def genre_svd_distance(x, y):
     enc_size = 32
     return custom_distance(x, y, enc_size, has_svd=True, has_genre=True)
 
 
-@numba.njit()
+# @numba.njit()
 def custom_distance(x, y, enc_size, has_svd, has_genre):
     """
     Customized distance function for approximating nearest neighbors. Expects two 1d arrays for inputs x and y. These
@@ -100,8 +101,8 @@ def custom_distance(x, y, enc_size, has_svd, has_genre):
     x_mod = x.reshape((-1, enc_size+1))
     y_mod = y.reshape((-1, enc_size+1))
 
-    x_mod = np.array([list(x) for x in x_mod if x.any()])
-    y_mod = np.array([list(y) for y in y_mod if y.any()])
+    x_mod = x_mod[x_mod.sum(axis=1) != 0]
+    y_mod = y_mod[y_mod.sum(axis=1) != 0]
 
     if has_svd:
         x_svd = x_mod[0]
@@ -117,7 +118,7 @@ def custom_distance(x, y, enc_size, has_svd, has_genre):
     y_mod = y_mod[:, 1:]
 
     # normalize x with L2 norm
-    x_norm = np.array([np.linalg.norm(x) for x in x_mod])  # same as np.linalg.norm(x, axis=1)), but not supported
+    x_norm = np.array([np.linalg.norm(x) for x in x_mod])  # same as np.linalg.norm(x_mod, axis=1), but not supported
     x_norm = (x_mod.T / x_norm).T
 
     # normalize y with L2 norm
@@ -243,7 +244,7 @@ def main():
     """
     use_preloaded_data = True
     use_preloaded_index_model = True
-    encoding_type = EncodingType.SVD
+    encoding_type = EncodingType.GENRE
 
     enc_size = 32
 
